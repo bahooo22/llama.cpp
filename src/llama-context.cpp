@@ -2975,6 +2975,12 @@ ggml_status llama_context::graph_compute(
 
     copy_experts.reset();
 
+    static const bool print_graph_nodes = std::getenv("GGML_CUDA_GRAPH_NODES") != nullptr;
+    if (print_graph_nodes) {
+        LLAMA_LOG_INFO("%s: graph nodes = %d, splits = %d, batched = %d\n",
+                __func__, ggml_graph_n_nodes(gf), ggml_backend_sched_get_n_splits(sched.get()), (int) batched);
+    }
+
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
