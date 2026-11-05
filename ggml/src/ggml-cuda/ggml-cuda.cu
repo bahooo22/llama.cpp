@@ -5070,6 +5070,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
     const int         chunk_size = ggml_cuda_graph_chunk_size();
     int               chunk_end  = chunk_size;
     size_t            n_chunks   = 0;
+    static const bool print_graph_nodes = std::getenv("GGML_CUDA_GRAPH_NODES") != nullptr;
+    if (print_graph_nodes) {
+        GGML_LOG_INFO("%s: graph nodes = %d, chunk_size = %d, estimated chunks = %d\n",
+                __func__, cgraph->n_nodes, chunk_size,
+                chunk_size > 0 ? (cgraph->n_nodes + chunk_size - 1) / chunk_size : 1);
+    }
 #endif // USE_CUDA_GRAPH
 
     const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
@@ -5254,6 +5260,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #ifdef USE_CUDA_GRAPH
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
             ggml_cuda_graph_launch_chunk(cuda_ctx, graph, n_chunks++);
+            if (print_graph_nodes) {
+                GGML_LOG_INFO("%s: captured graph nodes = %d, chunks = %zu\n",
+                        __func__, cgraph->n_nodes, n_chunks);
+            }
 
             // drop the chunks left over from a longer graph
             for (size_t i = n_chunks; i < graph->instances.size(); ++i) {
