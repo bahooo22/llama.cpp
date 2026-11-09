@@ -132,3 +132,17 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 - [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
 - [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
 - [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+
+## Fork measurement charts
+
+Measurements behind [PR #31850](https://github.com/ggml-org/llama.cpp/pull/31850) and the VRAM study
+on an 8 GB card (RTX 3060 Ti, CUDA 13.3, Windows 11):
+
+![Optimization steps at 96k](docs/assets/progress-96k.svg)
+
+![Prefill before and after the VRAM fix](docs/assets/windows-vram.svg)
+
+The first chart shows what the upload-stream change gave at 96k (stock flags against this fork,
+256-token responses); the second shows why `--n-cpu-moe 30` can collapse prefill on an 8 GB card and
+how the headroom fix across 64k–160k restores it. Full record with `file:line` sources for every
+number: [VRAM headroom](https://github.com/bahooo22/Strata/blob/pr-fa-mma/docs/research/VRAM_HEADROOM.md).
