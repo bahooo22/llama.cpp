@@ -146,3 +146,11 @@ The first chart shows what the upload-stream change gave at 96k (stock flags aga
 256-token responses); the second shows why `--n-cpu-moe 30` can collapse prefill on an 8 GB card and
 how the headroom fix across 64k–160k restores it. Full record with `file:line` sources for every
 number: [VRAM headroom](https://github.com/bahooo22/Strata/blob/pr-fa-mma/docs/research/VRAM_HEADROOM.md).
+
+![One model, two quants](docs/assets/quant-compare.svg)
+
+![Prefill by model and window](docs/assets/models-windows.svg)
+
+The third chart compares quants on one model (IQ4_XS/Q4_K_M against Q5_K_S at 96k and 128k); the
+fourth places every measured model on the same 64k-160k windows, with gaps left as gaps.
+
