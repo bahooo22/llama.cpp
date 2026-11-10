@@ -1,5 +1,22 @@
 # llama.cpp
 
+> **Локальные заметки этого клона:** роль в проекте, пин `3cf03257f`, сборка `llama-server` —
+> [`LOCAL.ru.md`](LOCAL.ru.md), по-английски — [`LOCAL.en.md`](LOCAL.en.md).
+>
+> **Сводные отчёты 11.11 по замерам на RTX 3060 Ti 8 ГиБ** (этот клон — вторая половина стенда,
+> каждая цифра сгенерирована и несёт якорь на первичник): [по llama.cpp](bench-3060ti/llama-fork-report.ru.md),
+> [общий по обоим форкам](bench-3060ti/full-measurement-report.ru.md),
+> [по Страте](bench-3060ti/strata-fork-report.ru.md); сырые свипы — файлами
+> `bench-3060ti/sweeps-appendix-*.ru.md`.
+>
+> **Fork notes:** this clone's role, the pinned `3cf03257f` and the `llama-server` build —
+> [`LOCAL.en.md`](LOCAL.en.md) (in Russian — [`LOCAL.ru.md`](LOCAL.ru.md)).
+>
+> **Consolidated 2026-11-11 reports for this bench** (this clone is the second half of it; every
+> number is generated and carries an anchor into the primary logs):
+> [llama.cpp](bench-3060ti/llama-fork-report.md), [both forks](bench-3060ti/full-measurement-report.md),
+> [Strata](bench-3060ti/strata-fork-report.md); raw sweeps are in `bench-3060ti/sweeps-appendix-*.md`.
+
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">
