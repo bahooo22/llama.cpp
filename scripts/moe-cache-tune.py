@@ -481,11 +481,18 @@ def device_room(log):
     m = re.search(r"(\S+) MoE cache size =", log)
     if host == 0 or not m:
         sys.exit("no MoE cache: the experts must be in host memory (-cmoe, -ncmoe or -ot)")
+    device = m.group(1)
     free = {d: int(x) for d, x in re.findall(r"using device (\S+) \(.*- (\d+) MiB free", log)}
-    used = sum(float(x) for d, x in re.findall(r"(\S+) +(?:model|KV|RS|compute|output) +buffer size =\s+([0-9.]+) MiB", log) if d == m.group(1))
-    if m.group(1) not in free:
-        sys.exit(f"the free memory of {m.group(1)} is not in the log, pass --max-mib")
-    return host, m.group(1), free[m.group(1)], used
+    if device not in free:
+        sys.exit(f"the free memory of {device} is not in the log, pass --max-mib")
+    # The last "using device" line already excludes every buffer allocated before it: summing
+    # them again double-counts the model, KV and earlier compute buffers. Only buffers logged
+    # after that line are still to be paid for. Without this, a draft model cut the room in
+    # half (7348 MiB free, buffers 5144 MiB, cache 1691 MiB instead of 4810 MiB).
+    marks = [x for x in re.finditer(r"using device %s \(.*- \d+ MiB free" % re.escape(device), log)]
+    tail = log[marks[-1].end():] if marks else log
+    used = sum(float(x) for d, x in re.findall(r"(\S+) +(?:model|KV|RS|compute|output) +buffer size =\s+([0-9.]+) MiB", tail) if d == device)
+    return host, device, free[device], used
 
 
 def run_server(cmd, out, mib, share, n_predict, seed, label, warm):
