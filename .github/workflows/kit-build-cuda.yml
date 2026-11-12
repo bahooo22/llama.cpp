@@ -1,0 +1,156 @@
+# =============================================================================
+# Portable-комплект, автоматика: сборка ggml-cuda/llama-server при пушах.
+# =============================================================================
+# Что здесь меряется и зачем:
+#   - зелёная сборка НЕ доказывает, что наши патчи на месте: маркеры проверяются
+#     отдельно, гейтом patch_markers.py по байтам ggml-base.dll / ggml-cuda.dll / llama.dll.
+#   - CI-скрипты (build_kit.ps1, install_cuda_redist.ps1, patch_markers.py) и реестр
+#     маркеров живут в форке Страты; копировать их сюда - второй источник истины,
+#     который расходится при первой же правке. Поэтому Strata проверяется отдельным
+#     checkout, а скрипты берутся из него.
+#   - build_kit.ps1 требует -StrataSrc безусловно (отказ rc=2 даже для -Engines llama),
+#     так что checkout Страты здесь обязателен по двум причинам сразу.
+#   - CUDA в образе windows-раннера отсутствует: тулчейн собирается из redist-архивов
+#     install_cuda_redist.ps1 с закреплением sha256 по каждому архиву, каталог загрузок
+#     кешируется actions/cache.
+#   - -Arch влияет только на ширину codegen (какие SASS/cubin положены в dll), поэтому
+#     на пуше собирается одна архитектура 86 - быстрый контроль; полный набор 86;89;120
+#     собирает и публикует релизный workflow комплекта.
+#   - В Actions не меряются предельная цена архитектур (-SkipProbe) и запуск серверов с
+#     моделью: для этого нужна видеокарта, а GPU-раннера у форка нет.
+name: Kit build (llama.cpp CUDA servers)
+
+on:
+  push:
+    branches: [kit-all-sync]
+    paths:
+      - 'ggml/**'
+      - 'src/**'
+      - 'include/**'
+      - 'common/**'
+      - 'tools/server/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/kit-build-cuda.yml'
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: >-
+          CUDA-архитектуры через ; (86 - быстрый контроль, 86;89;120 - как в комплекте)
+        required: false
+        default: '86'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-build-llama-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CUDA_VERSION: '13.3.1'
+  STRATA_REPO: 'bahooo22/Strata'
+  STRATA_REF: 'main'
+
+jobs:
+  llama-cuda:
+    name: Сборка llama-server + ggml-cuda под CUDA
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      ARCH: ${{ github.event.inputs.arch || '86' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: llama }
+
+      - name: "Дерево Страты: CI-скрипты сборки и реестр маркеров"
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.STRATA_REPO }}
+          ref: ${{ env.STRATA_REF }}
+          path: strata
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Контроль входов до компиляции
+        shell: bash
+        run: |
+          for f in strata/packaging/kit/ci/build_kit.ps1 \
+                   strata/packaging/kit/ci/install_cuda_redist.ps1 \
+                   strata/packaging/kit/ci/patch_markers.py \
+                   strata/packaging/kit/ci/patch-markers.json \
+                   llama/CMakeLists.txt; do
+            if [ ! -f "$f" ]; then echo "::error::нет $f - сборка не начата"; exit 2; fi
+          done
+          python strata/packaging/kit/ci/patch_markers.py --selftest; rc=$?
+          echo "rc(patch_markers --selftest)=$rc"
+          [ "$rc" = 0 ]
+
+      - name: Кэш redist-архивов CUDA
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\cuda-dl
+          key: cuda-dl-${{ env.CUDA_VERSION }}-llama
+
+      - name: Тулчейн CUDA из redist-архивов
+        shell: pwsh
+        run: |
+          $ci = Join-Path $env:GITHUB_WORKSPACE 'strata\packaging\kit\ci'
+          & pwsh -NoProfile -NonInteractive -File $ci\install_cuda_redist.ps1 `
+              -Root (Join-Path $env:RUNNER_TEMP 'cuda') `
+              -CacheDir (Join-Path $env:RUNNER_TEMP 'cuda-dl') `
+              -CudaVersion $env:CUDA_VERSION
+          Write-Host "rc(install_cuda_redist)=$LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Сборка сервера llama.cpp под CUDA
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          $ci = Join-Path $ws 'strata\packaging\kit\ci'
+          & pwsh -NoProfile -NonInteractive -File $ci\build_kit.ps1 `
+              -StrataSrc (Join-Path $ws 'strata') `
+              -LlamaSrc (Join-Path $ws 'llama') `
+              -Cuda (Join-Path $env:RUNNER_TEMP 'cuda') `
+              -Out (Join-Path $env:RUNNER_TEMP 'kit') `
+              -Engines llama -Arch $env:ARCH -SkipProbe
+          Write-Host "rc(build_kit)=$LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Гейт «наши патчи в собранных dll»
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          $bd = Join-Path $ws 'llama\build-kit\bin'
+          python (Join-Path $ws 'strata\packaging\kit\ci\patch_markers.py') `
+              --engine llama `
+              --bin (Join-Path $bd 'ggml-base.dll') `
+              --bin (Join-Path $bd 'ggml-cuda.dll') `
+              --bin (Join-Path $bd 'llama.dll') `
+              --out (Join-Path $env:RUNNER_TEMP 'kit\markers-llama.json')
+          Write-Host "rc(patch_markers)=$LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Меры и логи прогона
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kit-measures-llama-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}\kit\build-measure.partial.json
+            ${{ runner.temp }}\kit\elf-proof.partial.json
+            ${{ runner.temp }}\kit\markers-llama.json
+            ${{ runner.temp }}\kit\build-llama.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Бинарники llama-ноги
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-cuda-servers-${{ github.sha }}
+          path: |
+            llama\build-kit\bin\llama-server.exe
+            llama\build-kit\bin\ggml-base.dll
+            llama\build-kit\bin\ggml-cuda.dll
+            llama\build-kit\bin\llama.dll
+          retention-days: 14
