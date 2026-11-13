@@ -56,6 +56,19 @@ env:
   PYTHONUTF8: '1'
   STRATA_REPO: 'bahooo22/Strata'
   STRATA_REF: 'main'
+  # Набор серверов пуш-ноги ОДНИМ списком: его читает и гейт полноты, и upload-artifact.
+  # Две раздельные копии (paths в шаге + список в гейте) - это ровно класс «названные пути
+  # ≠ загруженные файлы», и он же расходится молча, когда список правят только в одном месте.
+  ARTIFACT_FILES: |
+    llama\build-kit\bin\llama-server.exe
+    llama\build-kit\bin\llama-server-impl.dll
+    llama\build-kit\bin\llama-common.dll
+    llama\build-kit\bin\llama.dll
+    llama\build-kit\bin\mtmd.dll
+    llama\build-kit\bin\ggml.dll
+    llama\build-kit\bin\ggml-base.dll
+    llama\build-kit\bin\ggml-cpu.dll
+    llama\build-kit\bin\ggml-cuda.dll
 
 jobs:
   llama-cuda:
@@ -149,6 +162,30 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Гейт «набор артефакта собран полностью»
+        shell: pwsh
+        run: |
+          # why not if-no-files-found: error: первичник actions/upload-artifact
+          # (src/upload/upload-artifact.ts:31) включает его только на ПУСТОЕ множество
+          # (filesToUpload.length === 0), а поиск - один глоб по всем путям сразу
+          # (src/shared/search.ts:82-91). Красный прогон 43345549955 утащил этот артефакт
+          # из 4 бинарников вместо 9 именно так: множество непустое, и флаг молчит.
+          # Здесь меряется наличие каждого названного файла, а не «есть ли хоть один».
+          $files = @($env:ARTIFACT_FILES -split '\r?\n' | Where-Object { $_ })
+          if ($files.Count -eq 0) {
+              Write-Host "::error::ARTIFACT_FILES пуст - набор не назван, мерять нечего"
+              exit 2
+          }
+          $missing = @($files | Where-Object {
+              -not (Test-Path -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $_))
+          })
+          if ($missing) {
+              Write-Host ("::error::нет {0} файлов из набора ({1} названо): {2}" -f
+                  $missing.Count, $files.Count, ($missing -join ', '))
+              exit 1
+          }
+          Write-Host "набор артефакта: $($files.Count) файлов на месте"
+
       - name: Бинарники llama-ноги
         if: success()
         uses: actions/upload-artifact@v4
@@ -159,14 +196,10 @@ jobs:
           # зовут её из ggml-base. Сокращать список до «трёх носителей маркеров» нельзя -
           # артефакт пуш-ноги называют набором серверов, и он обязан быть набираемым.
           # cublas остаётся за пределом: он приезжает из redist-архива, а не из этого дерева.
-          path: |
-            llama\build-kit\bin\llama-server.exe
-            llama\build-kit\bin\llama-server-impl.dll
-            llama\build-kit\bin\llama-common.dll
-            llama\build-kit\bin\llama.dll
-            llama\build-kit\bin\mtmd.dll
-            llama\build-kit\bin\ggml.dll
-            llama\build-kit\bin\ggml-base.dll
-            llama\build-kit\bin\ggml-cpu.dll
-            llama\build-kit\bin\ggml-cuda.dll
+          # Список лежит в env.ARTIFACT_FILES: его же проверяет гейт полноты выше.
+          path: ${{ env.ARTIFACT_FILES }}
           retention-days: 14
+          # Пустое множество - отдельная поломка (сборка не произвела ничего), и она обязана
+          # быть красной, а не warn. Шаги мер выше остаются на warn осознанно: у них
+          # if: always(), и пустой лог меры - симптом уже упавшего job, а не новая причина.
+          if-no-files-found: error
