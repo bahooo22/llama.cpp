@@ -154,9 +154,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llama-cuda-servers-${{ github.sha }}
+          # Тот же набор, что укладывает в комплект pack_kit: обёртка llama-server.exe без
+          # llama-server-impl.dll и llama-common.dll не запускается, а ggml.dll и ggml-cpu.dll
+          # зовут её из ggml-base. Сокращать список до «трёх носителей маркеров» нельзя -
+          # артефакт пуш-ноги называют набором серверов, и он обязан быть набираемым.
+          # cublas остаётся за пределом: он приезжает из redist-архива, а не из этого дерева.
           path: |
             llama\build-kit\bin\llama-server.exe
-            llama\build-kit\bin\ggml-base.dll
-            llama\build-kit\bin\ggml-cuda.dll
+            llama\build-kit\bin\llama-server-impl.dll
+            llama\build-kit\bin\llama-common.dll
             llama\build-kit\bin\llama.dll
+            llama\build-kit\bin\mtmd.dll
+            llama\build-kit\bin\ggml.dll
+            llama\build-kit\bin\ggml-base.dll
+            llama\build-kit\bin\ggml-cpu.dll
+            llama\build-kit\bin\ggml-cuda.dll
           retention-days: 14
