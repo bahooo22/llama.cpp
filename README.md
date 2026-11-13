@@ -9,6 +9,10 @@
 > [по Страте](bench-3060ti/strata-fork-report.ru.md); сырые свипы — файлами
 > `bench-3060ti/sweeps-appendix-*.ru.md`.
 >
+> **Готовый портативный комплект** (оба движка стенда, собранные в GitHub Actions) — ассетом релиза в
+> форке Страты: [скачать `gpu-infer-kit-2026-11-13.zip`](https://github.com/bahooo22/Strata/releases/download/kit-2026-11-13/gpu-infer-kit-2026-11-13.zip),
+> описание — [`bench-3060ti/kit/README.ru.md`](bench-3060ti/kit/README.ru.md).
+>
 > **Fork notes:** this clone's role, the pinned `3cf03257f` and the `llama-server` build —
 > [`LOCAL.en.md`](LOCAL.en.md) (in Russian — [`LOCAL.ru.md`](LOCAL.ru.md)).
 >
@@ -16,6 +20,11 @@
 > number is generated and carries an anchor into the primary logs):
 > [llama.cpp](bench-3060ti/llama-fork-report.md), [both forks](bench-3060ti/full-measurement-report.md),
 > [Strata](bench-3060ti/strata-fork-report.md); raw sweeps are in `bench-3060ti/sweeps-appendix-*.md`.
+>
+> **The ready portable kit** (both engines of this bench, built in GitHub Actions) is an asset of a
+> release in the Strata fork:
+> [download `gpu-infer-kit-2026-11-13.zip`](https://github.com/bahooo22/Strata/releases/download/kit-2026-11-13/gpu-infer-kit-2026-11-13.zip),
+> description — [`bench-3060ti/kit/README.en.md`](bench-3060ti/kit/README.en.md).
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 

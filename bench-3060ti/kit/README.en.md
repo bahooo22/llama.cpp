@@ -7,6 +7,16 @@ where a measurement does not exist the kit says so out loud - "this is a formula
 
 The archive contains no models. The kit never writes outside its own folder.
 
+## Where to get the finished archive
+
+The kit is published as an asset of a release in the Strata fork, which is also where it is built:
+[the release page](https://github.com/bahooo22/Strata/releases/tag/kit-2026-11-13) and the direct
+download link [gpu-infer-kit-2026-11-13.zip](https://github.com/bahooo22/Strata/releases/download/kit-2026-11-13/gpu-infer-kit-2026-11-13.zip),
+852 112 426 bytes. Both links were measured on 2026-11-13 with an anonymous request and no token: the
+release answers 200 with `draft=false`, and the download returns the header `504b0304` with the
+declared length. This archive carries both engines - `llama-server.exe` with `ggml-cuda.dll` from
+here, and Strata as well.
+
 ## Quick start
 
 1. Unpack the archive anywhere (a path without non-ASCII characters is preferable, not required).
