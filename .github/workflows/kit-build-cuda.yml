@@ -15,7 +15,7 @@
 #     кешируется actions/cache.
 #   - -Arch влияет только на ширину codegen (какие SASS/cubin положены в dll), поэтому
 #     на пуше собирается одна архитектура 86 - быстрый контроль; полный набор 86;89;120
-#     собирает и публикует релизный workflow комплекта.
+#     собирает и публикует workflow релиза комплекта.
 #   - В Actions не меряются предельная цена архитектур (-SkipProbe) и запуск серверов с
 #     моделью: для этого нужна видеокарта, а GPU-раннера у форка нет.
 name: Kit build (llama.cpp CUDA servers)
@@ -77,7 +77,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Контроль входов до компиляции
+      - name: Контроль входных файлов до компиляции
         shell: bash
         run: |
           for f in strata/packaging/kit/ci/build_kit.ps1 \
@@ -149,7 +149,7 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-      - name: Бинарники llama-ноги
+      - name: Бинарники llama.cpp
         if: success()
         uses: actions/upload-artifact@v4
         with:
