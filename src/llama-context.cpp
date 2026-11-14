@@ -17,7 +17,9 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -3141,6 +3143,12 @@ ggml_status llama_context::graph_compute(
 
     copy_experts.reset();
 
+    static const bool print_graph_nodes = std::getenv("GGML_CUDA_GRAPH_NODES") != nullptr;
+    if (print_graph_nodes) {
+        LLAMA_LOG_INFO("%s: graph nodes = %d, splits = %d, batched = %d\n",
+                __func__, ggml_graph_n_nodes(gf), ggml_backend_sched_get_n_splits(sched.get()), (int) batched);
+    }
+
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
@@ -3193,7 +3201,35 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         }
 
         st.ids = ids;
+
+        // GGML_MOE_HIST: top-16 expert share, used to size --moe-cache-mib
+        static const bool moe_hist = std::getenv("GGML_MOE_HIST") != nullptr;
+        if (moe_hist) {
+            std::vector<int64_t> cnt(n_expert, 0);
+            int64_t n_ids = 0;
+            for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < ids->ne[0]; i0++) {
+                    const int32_t id = st.ids_data[i1*ids->nb[1]/sizeof(int32_t) + i0*ids->nb[0]/sizeof(int32_t)];
+                    cnt[id]++;
+                    n_ids++;
+                }
+            }
+            std::sort(cnt.begin(), cnt.end());
+            int64_t top = 0;
+            for (int64_t i = std::max<int64_t>(0, n_expert - 16); i < n_expert; i++) {
+                top += cnt[i];
+            }
+            fprintf(stderr, "moe-hist: %s experts %lld ids %lld top16 %.4f\n",
+                    src->name, (long long) n_expert, (long long) n_ids,
+                    n_ids > 0 ? (double) top / n_ids : 0.0);
+            fflush(stderr);
+        }
     }
+
+    // GGML_MOE_TRACE: H2D bytes copied for this node (cached experts are D2D and not counted)
+    static const bool moe_trace = std::getenv("GGML_MOE_TRACE") != nullptr;
+    size_t trace_bytes = 0;
+    size_t trace_cached = 0;
 
     // group consecutive experts and copy them together
     for (int64_t first = 0; first < n_expert; ) {
@@ -3214,7 +3250,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
                 e++;
                 continue;
             }
+            trace_cached += (size_t) n * expert_size;
             if (next < e) {
+                trace_bytes += (e - next)*expert_size;
                 ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
             }
             e   += n;
@@ -3226,10 +3264,16 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
         const size_t size    = (last + 1 - next)*expert_size + padding;
         if (size > 0) {
+            trace_bytes += size;
             ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
         }
 
         first = last + 1;
+    }
+
+    if (moe_trace) {
+        fprintf(stderr, "moe-trace: node %p bytes %zu cached %zu\n", (const void *) src, trace_bytes, trace_cached);
+        fflush(stderr);
     }
 
     return true;

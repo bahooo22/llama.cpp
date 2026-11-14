@@ -191,6 +191,11 @@ static int ggml_cuda_op_offload_min_batch() {
     return min_batch;
 }
 
+static bool ggml_cuda_upload_stream_enabled() {
+    static const bool enabled = ggml_cuda_env_flag("GGML_CUDA_UPLOAD_STREAM");
+    return enabled;
+}
+
 static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
     cudaError_t err;
@@ -917,6 +922,17 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
+    }
+    if (up_stream != nullptr) {
+        CUDA_CHECK(cudaStreamDestroy(up_stream));
+    }
+    for (int i = 0; i < n_up_events; ++i) {
+        if (up_events[i] != nullptr) {
+            CUDA_CHECK(cudaEventDestroy(up_events[i]));
+        }
+    }
+    if (up_wait_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(up_wait_event));
     }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
@@ -3091,7 +3107,35 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
-    CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
+    if (!ggml_cuda_upload_stream_enabled()) {
+        CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
+        return;
+    }
+
+    ggml_cuda_set_device(cuda_ctx->device);
+    if (cuda_ctx->up_stream == nullptr) {
+        CUDA_CHECK(cudaStreamCreateWithFlags(&cuda_ctx->up_stream, cudaStreamNonBlocking));
+        CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->up_wait_event, cudaEventDisableTiming));
+        for (int i = 0; i < ggml_backend_cuda_context::n_up_events; ++i) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->up_events[i], cudaEventDisableTiming));
+        }
+    }
+    // the scheduler has already made the main stream wait for the previous use of this
+    // staging buffer; inherit that boundary instead of holding a scheduler event pointer
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->up_wait_event, cuda_ctx->stream()));
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->up_stream, cuda_ctx->up_wait_event, 0));
+
+    cudaEvent_t ev = cuda_ctx->up_events[cuda_ctx->up_event_idx];
+    cuda_ctx->up_event_idx = (cuda_ctx->up_event_idx + 1) % ggml_backend_cuda_context::n_up_events;
+    const cudaError_t ev_state = cudaEventQuery(ev);
+    if (ev_state == cudaErrorNotReady) {
+        CUDA_CHECK(cudaEventSynchronize(ev));
+    } else {
+        CUDA_CHECK(ev_state);
+    }
+    CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->up_stream));
+    CUDA_CHECK(cudaEventRecord(ev, cuda_ctx->up_stream));
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), ev, 0));
 }
 
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -4165,20 +4209,23 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             add = cgraph->nodes[node_idx+2];
         }
 
-        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
-
-        //rms norm only supports F32
-        if (mul->src[0]->type != GGML_TYPE_F32 ||
-            mul->src[1]->type != GGML_TYPE_F32 ||
-            mul->type != GGML_TYPE_F32) {
+        // the mul operand is a norm weight, which model files store as F32;
+        // the add operand is an F32 bias or a residual with the type of x
+        const ggml_type type = rms_norm->type;
+        if ((type != GGML_TYPE_F32 && type != GGML_TYPE_BF16) || rms_norm->src[0]->type != type) {
             return false;
         }
 
-        if (add && (add->src[0]->type != GGML_TYPE_F32 ||
-            add->src[1]->type != GGML_TYPE_F32 ||
-            add->type != GGML_TYPE_F32) ) {
+        const ggml_tensor * mul_src = mul->src[0] == rms_norm ? mul->src[1] : mul->src[0];
+        if (mul_src->type != GGML_TYPE_F32 || mul->type != type) {
             return false;
+        }
+
+        if (add) {
+            const ggml_tensor * add_src = add->src[0] == mul ? add->src[1] : add->src[0];
+            if ((add_src->type != GGML_TYPE_F32 && add_src->type != type) || add->type != type) {
+                return false;
+            }
         }
 
         //if rms norm is the B operand, then we don't handle broadcast
@@ -4202,8 +4249,9 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor * scale    = cgraph->nodes[node_idx+1];
 
-        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
+        if (rms_norm->src[0]->type != GGML_TYPE_F32 || rms_norm->type != GGML_TYPE_F32) {
+            return false;
+        }
 
         float bias;
         memcpy(&bias, (const float *) scale->op_params + 1, sizeof(float));
@@ -5185,6 +5233,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
     const int         chunk_size = ggml_cuda_graph_chunk_size();
     int               chunk_end  = chunk_size;
     size_t            n_chunks   = 0;
+    static const bool print_graph_nodes = std::getenv("GGML_CUDA_GRAPH_NODES") != nullptr;
+    if (print_graph_nodes) {
+        GGML_LOG_INFO("%s: graph nodes = %d, chunk_size = %d, estimated chunks = %d\n",
+                __func__, cgraph->n_nodes, chunk_size,
+                chunk_size > 0 ? (cgraph->n_nodes + chunk_size - 1) / chunk_size : 1);
+    }
 #endif // USE_CUDA_GRAPH
 
     const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
@@ -5369,6 +5423,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #ifdef USE_CUDA_GRAPH
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
             ggml_cuda_graph_launch_chunk(cuda_ctx, graph, n_chunks++);
+            if (print_graph_nodes) {
+                GGML_LOG_INFO("%s: captured graph nodes = %d, chunks = %zu\n",
+                        __func__, cgraph->n_nodes, n_chunks);
+            }
 
             // drop the chunks left over from a longer graph
             for (size_t i = n_chunks; i < graph->instances.size(); ++i) {
@@ -6524,9 +6582,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SILU_BACK:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_NORM:
-        case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_RMS_NORM:
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_BF16) && op->type == op->src[0]->type &&
+                   ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_RMS_NORM_BACK:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_NONE:
